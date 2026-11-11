@@ -382,6 +382,9 @@ is not shared with the original handles."
       (cl-incf (cdar handle))))
   handles)
 
+(defvar eshell--close-handles-error nil
+  "Shared cell holding the last close error inside `eshell-trap-errors'.")
+
 (defun eshell-close-handles (&optional exit-code result handles)
   "Close all of the current HANDLES, taking refcounts into account.
 If HANDLES is nil, use `eshell-current-handles'.
@@ -398,9 +401,22 @@ the value already set in `eshell-last-command-result'."
     (cl-assert (eq (car result) 'quote))
     (setq eshell-last-command-result (cadr result)))
   (let ((handles (or handles eshell-current-handles))
-        (succeeded (= eshell-last-command-status 0)))
+        (succeeded (= eshell-last-command-status 0))
+        first-error)
     (dotimes (idx eshell-number-of-handles)
-      (eshell-close-handle (aref handles idx) succeeded))))
+      (condition-case err
+          (eshell-close-handle (aref handles idx) succeeded)
+        (error (unless first-error (setq first-error err)))))
+    ;; A protected handle can still have references, including aliases in
+    ;; this vector.  Forget only handles whose last reference was released.
+    (dotimes (idx eshell-number-of-handles)
+      (when-let ((handle (aref handles idx)))
+        (when (= (cdar handle) 0)
+          (aset handles idx nil))))
+    (when first-error
+      (when eshell--close-handles-error
+        (setcar eshell--close-handles-error first-error))
+      (signal (car first-error) (cdr first-error)))))
 
 (defun eshell-close-handle (handle status)
   "Close a single HANDLE, taking refcounts into account.
@@ -411,9 +427,17 @@ be a non-nil value on successful termination."
                "Attempted to close a handle with 0 references")
     (when (and (> (cdar handle) 0)
                (= (cl-decf (cdar handle)) 0))
-      (dolist (target (caar handle))
-        (eshell-close-target target status))
-      (setcar (car handle) nil))))
+      (let ((targets (caar handle))
+            first-error)
+        ;; Release ownership before calling target code: saving a file can
+        ;; fail, but neither that target nor earlier ones should close twice.
+        (setcar (car handle) nil)
+        (dolist (target targets)
+          (condition-case err
+              (eshell-close-target target status)
+            (error (unless first-error (setq first-error err)))))
+        (when first-error
+          (signal (car first-error) (cdr first-error)))))))
 
 (defun eshell-set-output-handle (index mode &optional target handles)
   "Set handle INDEX for the current HANDLES to point to TARGET using MODE.

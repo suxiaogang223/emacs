@@ -6136,30 +6136,32 @@ Before and after saving the buffer, this function runs
 		  ;; write-region-annotate-functions may use it.
 		  (write-region nil nil tempname nil realname
 				buffer-file-truename)
-		  (when save-silently (message nil)))
-	      ;; If we failed, restore the buffer's modtime.
-	      (error (set-visited-file-modtime old-modtime)
-		     (signal (car err) (cdr err))))
-	    ;; Since we have created an entirely new file,
-	    ;; make sure it gets the right permission bits set.
-	    (setq setmodes
-                  (or setmodes
-                      (list (or (file-modes buffer-file-name)
-				(logand ?\666 (default-file-modes)))
-                            (with-demoted-errors
-                                "Error getting extended attributes: %s"
-			      (file-extended-attributes buffer-file-name))
-			    buffer-file-name)))
-	    ;; We succeeded in writing the temp file,
-	    ;; so rename it.
-	    (rename-file tempname
-                         (if (and file-preserve-symlinks-on-save
-                                  (file-symlink-p buffer-file-name))
-                             ;; Write to the file that the symlink
-                             ;; points to.
-                             (file-chase-links buffer-file-name)
-                           buffer-file-name)
-                         t))
+		  (when save-silently (message nil))
+	          ;; Since we have created an entirely new file,
+	          ;; make sure it gets the right permission bits set.
+	          (setq setmodes
+                        (or setmodes
+                            (list (or (file-modes buffer-file-name)
+				      (logand ?\666 (default-file-modes)))
+                                  (with-demoted-errors
+                                      "Error getting extended attributes: %s"
+			            (file-extended-attributes buffer-file-name))
+			          buffer-file-name)))
+	          ;; We succeeded in writing the temp file,
+	          ;; so rename it.
+	          (rename-file tempname
+                               (if (and file-preserve-symlinks-on-save
+                                        (file-symlink-p buffer-file-name))
+                                   ;; Write to the file that the symlink
+                                   ;; points to.
+                                   (file-chase-links buffer-file-name)
+                                 buffer-file-name)
+                               t))
+	      ;; `write-region' marks the buffer saved before replacement.
+	      ;; Restore its unsaved state on failure or interruption.
+	      ((error quit) (set-visited-file-modtime old-modtime)
+		            (set-buffer-modified-p t)
+		            (signal (car err) (cdr err)))))
 	;; If file not writable, see if we can make it writable
 	;; temporarily while we write it (its original modes will be
 	;; restored in 'basic-save-buffer' or, in case of an error, in

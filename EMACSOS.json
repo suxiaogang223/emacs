@@ -1,0 +1,5 @@
+{
+  "upstream_repository": "https://github.com/emacs-mirror/emacs",
+  "upstream_tag": "emacs-30.2",
+  "upstream_commit": "636f166cfc86aa90d63f592fd99f3fdd9ef95ebd"
+}

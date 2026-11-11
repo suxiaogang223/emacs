@@ -1535,6 +1535,8 @@ please check its value")
 
     ;; If the user has a file of abbrevs, read it (unless -batch).
     (when (and (not noninteractive)
+               ;; The emacsOS guest defers user Lisp to its explicit boot gate.
+               (not (fboundp 'emacsos--kernel-call))
                (file-exists-p abbrev-file-name)
                (file-readable-p abbrev-file-name))
       (quietly-read-abbrev-file abbrev-file-name))

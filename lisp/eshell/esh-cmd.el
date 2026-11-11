@@ -784,14 +784,26 @@ to this hook using `nconc', and *not* `add-hook'.
 
 Someday, when Scheme will become the dominant Emacs language, all of
 this grossness will be made to disappear by using `call/cc'..."
-  `(eshell-condition-case err
-       (let ((eshell-this-command-hook '(ignore)))
-         (unwind-protect
-             ,object
-           (mapc #'funcall eshell-this-command-hook)))
-     (error
-      (eshell-errorn (error-message-string err))
-      (eshell-close-handles 1))))
+  `(let ((eshell--close-handles-error
+          (or eshell--close-handles-error (list nil))))
+     (eshell-condition-case err
+         (let ((eshell-this-command-hook '(ignore)))
+           (unwind-protect
+               ,object
+             (mapc #'funcall eshell-this-command-hook)))
+       (error
+        (if (and (eq (car err) (car (car eshell--close-handles-error)))
+                 (eq (cdr err) (cdr (car eshell--close-handles-error))))
+            ;; Share the specific error through nested traps.  A close
+            ;; error caught by user code must not affect later errors.
+            (progn
+              (setq eshell-last-command-status 1)
+              (signal (car err) (cdr err)))
+          (eshell-errorn (error-message-string err))
+          (condition-case nil
+              (eshell-close-handles 1)
+            ;; Cleanup must not replace the original command error.
+            (error (signal (car err) (cdr err)))))))))
 
 (defmacro eshell-with-copied-handles (object &optional steal-p)
   "Duplicate current I/O handles, so OBJECT works with its own copy.

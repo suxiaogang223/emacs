@@ -2334,6 +2334,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
       syms_of_doc ();
       syms_of_editfns ();
       syms_of_emacs ();
+#ifdef HAVE_EMACSOS
+      syms_of_emacsos ();
+#endif
       syms_of_filelock ();
       syms_of_indent ();
       syms_of_insdel ();

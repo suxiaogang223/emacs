@@ -288,6 +288,17 @@ AC_ARG_WITH([all],
   [with_features=$withval],
   [with_features=yes])
 
+AC_ARG_WITH([emacsos],
+  [AS_HELP_STRING([--with-emacsos], [enable the emacsOS kernel interface])],
+  [], [with_emacsos=no])
+AS_CASE([$with_emacsos],
+  [yes], [AC_DEFINE([HAVE_EMACSOS], [1],
+                   [Define to 1 to enable the emacsOS kernel interface.])
+          EMACSOS_OBJ=emacsos.o],
+  [no], [EMACSOS_OBJ=],
+  [AC_MSG_ERROR([--with-emacsos accepts only yes or no])])
+AC_SUBST([EMACSOS_OBJ])
+
 dnl ARCH_INDEPENDENT_CONFIG_FILES(FILE...)
 dnl Like AC_CONFIG_FILES(FILE).  However, do not generate this
 dnl   if configure is being called recursively in preparation

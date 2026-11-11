@@ -4985,6 +4985,11 @@ extern void labeled_restrictions_remove_in_current_buffer (void);
 extern void init_editfns (void);
 extern void syms_of_editfns (void);
 
+#ifdef HAVE_EMACSOS
+/* Defined in emacsos.c.  */
+extern void syms_of_emacsos (void);
+#endif
+
 /* Defined in buffer.c.  */
 extern bool mouse_face_overlay_overlaps (Lisp_Object);
 extern bool disable_line_numbers_overlay_at_eob (void);

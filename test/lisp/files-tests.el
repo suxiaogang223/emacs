@@ -1493,6 +1493,119 @@ renaming only, rather than modified in-place."
             (should (null (save-buffer))))
         (ignore-errors (advice-remove #'write-region advice))))))
 
+(defun files-tests--precious-save-failure (phase &optional condition)
+  "Check unsaved state when saving signals CONDITION during PHASE."
+  (ert-with-temp-directory directory
+    (let* ((file (expand-file-name "precious" directory))
+           (backup (make-backup-file-name file))
+           (backup-enable-predicate nil)
+           (make-backup-files t)
+           (create-lockfiles t)
+           (original-rename (symbol-function 'rename-file))
+           (original-modes (symbol-function 'file-modes))
+           (failure (or condition '(file-error "Injected precious save failure")))
+           temporary)
+      (with-temp-file file (insert "old contents\n"))
+      (set-file-times file '(10000 0))
+      (with-current-buffer (find-file-noselect file)
+        (unwind-protect
+            (progn
+              (setq-local file-precious-flag t)
+              ;; A second save exercises mode lookup after writing, since
+              ;; the first save has already made the ordinary backup.
+              (when (eq phase 'modes)
+                (insert "previous save\n")
+                (save-buffer))
+              (let ((old-modtime (visited-file-modtime))
+                    (old-contents (buffer-string))
+                    caught)
+                (erase-buffer)
+                (insert "new contents\n")
+                (cl-letf (((symbol-function 'rename-file)
+                           (lambda (from to &rest options)
+                             (if (and (eq phase 'rename) (equal to file))
+                                 (progn
+                                   (setq temporary from)
+                                   (signal (car failure) (cdr failure)))
+                               (apply original-rename from to options))))
+                          ((symbol-function 'file-modes)
+                           (lambda (name &rest options)
+                             (if (and (eq phase 'modes) (equal name file)
+                                      (not (buffer-modified-p)))
+                                 (signal (car failure) (cdr failure))
+                               (apply original-modes name options)))))
+                  (setq caught (condition-case err (save-buffer)
+                                 ((file-error quit) err))))
+                (should (equal caught failure))
+                (should (buffer-modified-p))
+                (should (equal (visited-file-modtime) old-modtime))
+                (should (equal (buffer-string) "new contents\n"))
+                (should (equal (with-temp-buffer
+                                 (insert-file-contents-literally file)
+                                 (buffer-string))
+                               old-contents))
+                (should (equal (with-temp-buffer
+                                 (insert-file-contents-literally backup)
+                                 (buffer-string))
+                               "old contents\n"))
+                (when temporary
+                  (should (equal (with-temp-buffer
+                                   (insert-file-contents-literally temporary)
+                                   (buffer-string))
+                                 "new contents\n")))
+                ;; A normal retry must still save and clear the modified flag.
+                (save-buffer)
+                (should-not (buffer-modified-p))
+                (should (verify-visited-file-modtime (current-buffer)))
+                (should (equal (with-temp-buffer
+                                 (insert-file-contents-literally file)
+                                 (buffer-string))
+                               "new contents\n"))))
+          (set-buffer-modified-p nil)
+          (kill-buffer))))))
+
+(ert-deftest files-tests-precious-save-rename-failure-keeps-buffer-unsaved ()
+  (files-tests--precious-save-failure 'rename))
+
+(ert-deftest files-tests-precious-save-mode-failure-keeps-buffer-unsaved ()
+  (files-tests--precious-save-failure 'modes))
+
+(ert-deftest files-tests-precious-save-quit-keeps-buffer-unsaved ()
+  (files-tests--precious-save-failure 'rename '(quit interrupted-replacement)))
+
+(ert-deftest files-tests-precious-save-success-preserves-backup-and-modes ()
+  "Keep ordinary backup, lock and metadata behavior for successful saves."
+  (ert-with-temp-directory directory
+    (let* ((file (expand-file-name "precious" directory))
+           (backup-enable-predicate nil)
+           (make-backup-files t)
+           (create-lockfiles t))
+      (with-temp-file file (insert "old contents\n"))
+      (set-file-modes file #o640)
+      (with-current-buffer (find-file-noselect file)
+        (unwind-protect
+            (progn
+              (setq-local file-precious-flag t)
+              (erase-buffer)
+              (insert "new contents\n")
+              (should (file-locked-p file))
+              (save-buffer)
+              (should-not (buffer-modified-p))
+              (should (verify-visited-file-modtime (current-buffer)))
+              (should-not (file-locked-p file))
+              (should (= (file-modes file) #o640))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents-literally file)
+                               (buffer-string))
+                             "new contents\n"))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents-literally
+                                (make-backup-file-name file))
+                               (buffer-string))
+                             "old contents\n")))
+          (set-buffer-modified-p nil)
+          (kill-buffer))))))
+
 (ert-deftest files-test-file-size-human-readable ()
   (should (equal (file-size-human-readable 13) "13"))
   (should (equal (file-size-human-readable 13 'si) "13"))

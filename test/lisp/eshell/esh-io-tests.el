@@ -74,6 +74,111 @@
      (eshell-insert-command (format "echo new > %s" temp-file)))
     (should (equal (eshell-test-file-string temp-file) "new"))))
 
+(ert-deftest esh-io-test/redirect-file/save-error ()
+  "A failed save reports its error once and leaves the command retryable."
+  (dolist (body '("echo quota-ok" "{echo quota-ok}"))
+    (with-temp-eshell
+      (let* ((file (expand-file-name "no-space" eshell-directory-name))
+             (command (format "%s > %s" body file))
+             (write-region-function (symbol-function 'write-region))
+             (failed-writes 0)
+             (debug-on-error nil))
+        (unwind-protect
+            (progn
+              (cl-letf (((symbol-function 'write-region)
+                         (lambda (&rest args)
+                           (if (equal (nth 2 args) file)
+                               (progn
+                                 (cl-incf failed-writes)
+                                 (signal 'file-error
+                                         (list "Opening output file"
+                                               "No space left on device" file)))
+                             (apply write-region-function args)))))
+                (eshell-insert-command command))
+              (should (= failed-writes 1))
+              (should-not (file-exists-p file))
+              (should (= eshell-last-command-status 1))
+              (should (= (how-many "No space left on device" (point-min) (point-max)) 1))
+              (should-not (string-match-p "Assertion failed" (buffer-string)))
+              ;; RET at the restored input must work, without reinserting it.
+              (should (equal (buffer-substring-no-properties
+                              (line-beginning-position) (line-end-position))
+                             command))
+              (eshell-send-input)
+              (should (= eshell-last-command-status 0))
+              (should (equal (eshell-test-file-string file) "quota-ok")))
+          (when-let ((buffer (get-file-buffer file)))
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
+
+(ert-deftest esh-io-test/close-handles/errors ()
+  "Close all targets once, preserving the first error and shared references."
+  (let* ((closed nil)
+         (first-error '(file-error "first close failure"))
+         (eshell-virtual-targets nil)
+         (target (lambda (name fail)
+                   (let ((path (format "/dev/%s" name)))
+                     (push (list path
+                                 (eshell-function-target-create
+                                  #'ignore (lambda (_status)
+                                             (push name closed)
+                                             (when fail
+                                               (signal (car fail) (cdr fail))))))
+                           eshell-virtual-targets)
+                     path)))
+         (eshell-current-handles (eshell-create-handles t 'append))
+         (eshell-last-command-status 0))
+    (eshell-set-output-handle 1 'append (funcall target 'first first-error))
+    (eshell-set-output-handle 1 'append (funcall target 'second '(error "later")))
+    (eshell-set-output-handle 2 'append (funcall target 'stderr nil))
+    (should (equal (should-error (eshell-close-handles) :type 'file-error)
+                   first-error))
+    (should (equal (reverse closed) '(first second stderr)))
+    (should (seq-every-p #'null eshell-current-handles))
+    (eshell-close-handles 1)
+    (should (= (length closed) 3)))
+  (let* ((closed 0)
+         (eshell-current-handles (eshell-create-handles t 'append))
+         (eshell-last-command-status 0)
+         (eshell-virtual-targets
+          `(("/dev/shared" ,(eshell-function-target-create
+                             #'ignore (lambda (_status) (cl-incf closed)))))))
+    (eshell-set-all-output-handles 'append "/dev/shared")
+    (eshell-protect-handles eshell-current-handles)
+    (eshell-close-handles)
+    (should (= closed 0))
+    (should (aref eshell-current-handles 1))
+    (eshell-close-handles)
+    (should (= closed 1))
+    (should (seq-every-p #'null eshell-current-handles))))
+
+(ert-deftest esh-io-test/close-handles/caught-error ()
+  "An internally caught close error must not change later command errors."
+  (let* ((eshell-current-handles (eshell-create-handles 'eshell-test-value 'append))
+         (eshell-last-command-status 0)
+         (eshell-test-value "")
+         (other-handles (eshell-create-handles t 'append))
+         (eshell-virtual-targets
+          `(("/dev/fail" ,(eshell-function-target-create
+                           #'ignore (lambda (_status) (error "caught close error")))))))
+    (eshell-set-output-handle 1 'append "/dev/fail" other-handles)
+    (eshell-trap-errors
+     (progn
+       (ignore-errors (eshell-close-handles nil nil other-handles))
+       (error "ordinary command error")))
+    (should (equal eshell-test-value "ordinary command error\n"))
+    (should (= eshell-last-command-status 1)))
+  (let* ((eshell-current-handles (eshell-create-handles 'eshell-test-value 'append))
+         (eshell-last-command-status 0)
+         (eshell-test-value "")
+         (eshell-virtual-targets
+          `(("/dev/fail" ,(eshell-function-target-create
+                           #'ignore (lambda (_status) (error "cleanup error")))))))
+    (eshell-set-output-handle 1 'append "/dev/fail")
+    (should (equal (should-error (eshell-trap-errors (error "original error")))
+                   '(error "original error")))
+    (should (seq-every-p #'null eshell-current-handles))))
+
 (ert-deftest esh-io-test/redirect-file/append ()
   "Check that redirecting to a file in append mode works."
   (ert-with-temp-file temp-file
